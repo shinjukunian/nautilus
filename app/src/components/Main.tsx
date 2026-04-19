@@ -9,7 +9,7 @@ import {
   TOKEN_PROGRAM_ID,
 } from '@solana/spl-token';
 import { useNautilus } from '../hooks/useNautilus';
-import { PROGRAM_ID, RPC_ENDPOINT } from '../constants';
+import { PROGRAM_ID, RPC_ENDPOINT, IS_CANONICAL } from '../constants';
 import { Launch } from './Launch';
 import './Main.css';
 
@@ -79,6 +79,9 @@ function TokenPage() {
   const [recipient, setRecipient] = useState('');
   const [txStatus, setTxStatus] = useState<string | null>(null);
   const [meta, setMeta] = useState<TokenMeta>({});
+  const [unverifiedAcknowledged, setUnverifiedAcknowledged] = useState(false);
+
+  const [stageChangeWarning, setStageChangeWarning] = useState<{ freshStage: number; freshBuyPrice: number; amount: number; partialFill: boolean } | null>(null);
 
   useEffect(() => {
     if (!state) return;
@@ -88,12 +91,47 @@ function TokenPage() {
   const handleBuy = async () => {
     const n = parseInt(amount);
     if (!n || n <= 0) return;
+    if (!IS_CANONICAL && !unverifiedAcknowledged) return;
     try {
       setTxStatus('Confirm in Phantom...');
       await buy(n);
       setTxStatus('Done');
       setAmount('');
     } catch (e: any) {
+      if (e.message === 'StageChanged') {
+        setTxStatus(null);
+        setStageChangeWarning({
+          freshStage: e.freshStage,
+          freshBuyPrice: e.freshBuyPrice,
+          amount: n,
+          partialFill: !!e.partialFill,
+        });
+        return;
+      }
+      setTxStatus('Error: ' + e.message?.slice(0, 60));
+    }
+  };
+
+  const handleBuyConfirmed = async () => {
+    if (!stageChangeWarning) return;
+    const { freshStage, amount: n } = stageChangeWarning;
+    setStageChangeWarning(null);
+    try {
+      setTxStatus('Confirm in Phantom...');
+      await buy(n, freshStage);
+      setTxStatus('Done');
+      setAmount('');
+    } catch (e: any) {
+      if (e.message === 'StageChanged') {
+        setTxStatus(null);
+        setStageChangeWarning({
+          freshStage: e.freshStage,
+          freshBuyPrice: e.freshBuyPrice,
+          amount: n,
+          partialFill: !!e.partialFill,
+        });
+        return;
+      }
       setTxStatus('Error: ' + e.message?.slice(0, 60));
     }
   };
@@ -101,6 +139,7 @@ function TokenPage() {
   const handleSell = async () => {
     const n = parseInt(amount);
     if (!n || n <= 0) return;
+    if (!IS_CANONICAL && !unverifiedAcknowledged) return;
     try {
       setTxStatus('Confirm in Phantom...');
       await sell(n);
@@ -187,6 +226,20 @@ function TokenPage() {
   return (
     <div>
       <button className="back-btn" onClick={() => { window.location.href = '/nautilus/'; }}>← Back</button>
+
+      {!IS_CANONICAL && (
+        <div className="unverified-banner">
+          <span>⚠️ This token was created on the Nautilus protocol but is <strong>not the canonical NAUT token</strong>. Anyone can launch a token using this protocol.</span>
+          {!unverifiedAcknowledged && (
+            <button
+              className="unverified-ack-btn"
+              onClick={() => setUnverifiedAcknowledged(true)}
+            >
+              I understand — show buy/sell
+            </button>
+          )}
+        </div>
+      )}
 
       {state && (
         <section className="status-card">
@@ -297,18 +350,31 @@ function TokenPage() {
                 <span className="dim"> (0.5% spread)</span>
               </div>
             )}
+            {stageChangeWarning && (
+              <div className="stage-change-warning">
+                <strong>⚠️ Stage advanced while you were waiting.</strong>
+                {stageChangeWarning.partialFill && (
+                  <div>Part of your order already executed at the previous stage price. The rest was stopped because the stage advanced.</div>
+                )}
+                <div>New stage: {stageChangeWarning.freshStage} — New buy price: {(stageChangeWarning.freshBuyPrice / 1e9).toFixed(6)} SOL</div>
+                <div className="stage-change-btns">
+                  <button className="action-btn buy-btn" onClick={handleBuyConfirmed}>Buy at new price</button>
+                  <button className="cancel-btn" onClick={() => setStageChangeWarning(null)}>Cancel</button>
+                </div>
+              </div>
+            )}
             {txStatus && (
               <div className={'tx-status' + (txStatus.startsWith('Done') ? ' success' : txStatus.startsWith('Error') ? ' err' : '')}>
                 {txStatus}
               </div>
             )}
             {tab === 'buy' && (
-              <button className="action-btn buy-btn" onClick={handleBuy} disabled={loading || !amount || parseInt(amount) <= 0}>
+              <button className="action-btn buy-btn" onClick={handleBuy} disabled={loading || !amount || parseInt(amount) <= 0 || (!IS_CANONICAL && !unverifiedAcknowledged)}>
                 {loading ? 'Processing...' : 'Buy'}
               </button>
             )}
             {tab === 'sell' && (
-              <button className="action-btn sell-btn" onClick={handleSell} disabled={loading || !amount || parseInt(amount) <= 0}>
+              <button className="action-btn sell-btn" onClick={handleSell} disabled={loading || !amount || parseInt(amount) <= 0 || (!IS_CANONICAL && !unverifiedAcknowledged)}>
                 {loading ? 'Processing...' : 'Sell'}
               </button>
             )}

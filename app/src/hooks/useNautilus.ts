@@ -68,27 +68,63 @@ export function useNautilus() {
     }
   }, [connection, wallet.publicKey, state]);
 
-  const buy = useCallback(async (amount: number) => {
+  const buy = useCallback(async (amount: number, confirmedStage?: number) => {
     const program = getProgram();
     if (!program || !wallet.publicKey || !state) throw new Error('Wallet not connected');
     setLoading(true);
     setError(null);
     try {
+      // Re-fetch state immediately before submitting to detect stage advances.
+      // Compare against confirmedStage if provided (user already saw a warning),
+      // otherwise compare against the last known stage.
+      // This ensures even a second stage advance after confirmation is caught.
+      const provider = new AnchorProvider(connection, {} as any, { commitment: 'confirmed' });
+      const freshProgram = new Program(idl as any, provider);
+      const fresh = await (freshProgram.account as any).nautilusState.fetch(STATE_ADDRESS);
+      const freshStage = fresh.currentStage;
+      const initialExpectedStage = confirmedStage ?? state.currentStage;
+      if (freshStage !== initialExpectedStage) {
+        const freshBuyPrice = PRICE_TABLE[freshStage];
+        throw Object.assign(
+          new Error('StageChanged'),
+          { freshStage, freshBuyPrice }
+        );
+      }
+
       let remaining = amount;
+      let expectedStage = initialExpectedStage;
+      let chunksCompleted = 0;
       while (remaining > 0) {
+        // Re-check stage before every chunk to catch advances mid-buy.
+        const chunkFresh = await (freshProgram.account as any).nautilusState.fetch(STATE_ADDRESS);
+        const chunkStage = chunkFresh.currentStage;
+        if (chunkStage !== expectedStage) {
+          const freshBuyPrice = PRICE_TABLE[chunkStage];
+          if (chunksCompleted > 0) {
+            await fetchState();
+            await fetchBalances();
+          }
+          throw Object.assign(new Error('StageChanged'), {
+            freshStage: chunkStage,
+            freshBuyPrice,
+            partialFill: chunksCompleted > 0,
+          });
+        }
         const chunk = Math.min(remaining, 100_000);
         await program.methods
           .buy(new BN(chunk))
           .accounts({ state: STATE_ADDRESS, mint: state.mint, buyer: wallet.publicKey })
           .rpc();
         remaining -= chunk;
+        chunksCompleted++;
+        expectedStage = chunkStage;
       }
       await fetchState();
       await fetchBalances();
     } finally {
       setLoading(false);
     }
-  }, [getProgram, wallet.publicKey, state, fetchState, fetchBalances]);
+  }, [getProgram, wallet.publicKey, state, fetchState, fetchBalances, connection]);
 
   const sell = useCallback(async (amount: number) => {
     const program = getProgram();
