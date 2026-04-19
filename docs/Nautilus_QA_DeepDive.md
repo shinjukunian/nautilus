@@ -28,21 +28,26 @@ This document compiles technical inquiries and findings regarding the Nautilus P
 
 ---
 
-## 3. Mathematical Edge Cases & Security
+## 3. The "Recovery Floor" Guarantee
 
-### Q: What is "Rounding-Edge Griefing"?
-**A:** It is an attempt to exploit **integer math truncation** (rounding down) to avoid fees. 
-*   **Dust Leak:** Making sells so small that the 0.5% spread rounds to zero lamports.
-*   **Verification:** Stress tests confirmed that even 1-token sells typically generate a spread because of the high lamport-value of the `sell_price`. Monotonicity remained robust under "micro-sell" attacks.
-
-### Q: Can users bypass the protocol for Buys or Sells?
-**A:** 
-*   **Buys:** A user can send SOL directly to the treasury PDA. This is a "donation" that the protocol's internal ledger (`state.treasury_balance`) ignores. It does not increase the `sell_price` or advance stages, acting only as a safety buffer.
-*   **Sells:** **Impossible.** The treasury is a PDA with no private key. The only way to move SOL out is through the `sell` instruction, which cryptographically enforces a token burn.
+### Q: Is the 1/φ floor just a theoretical maximum?
+**A:** It is the **absolute mathematical minimum**. The protocol's "Proof Note" establishes that the **"Buy-only" path is the worst-case scenario.** 
+*   If any selling happens at any point, the 0.5% retained spread "pads" the treasury.
+*   Therefore, any real-world trading activity only serves to move the floor **higher** (safer) than the theoretical $0.618$ ratio.
 
 ---
 
-## 4. Stage 2→3 Transition & "Windfall" Dynamics
+## 4. Large Sell Orders & The Whale Dump Demo
+
+### Q: What happens if a whale dumps a huge percentage of the supply?
+**A:** In a traditional AMM, this would crash the price to near-zero. In Nautilus, **it increases the exit price for everyone else.**
+*   **The Demo:** The author's `whale_dump_demo.ts` simulated an **80% supply dump** at Stage 4. 
+*   **The Result:** The `sell_price` for the remaining 20% of holders actually **increased** after the dump.
+*   **The Logic:** Because 0.5% of the whale's huge exit remains in the treasury while their tokens are burned, the "backing per token" for the survivors improves. This is the **"Inverse Panic"** effect.
+
+---
+
+## 5. Stage 2→3 Transition & "Windfall" Dynamics
 
 ### Q: Is it beneficial to buy just before the Stage 3 transition?
 **A:** Yes. The shift from "Net Supply" logic to "Cumulative Logic" creates a unique opportunity. 
@@ -53,20 +58,18 @@ This document compiles technical inquiries and findings regarding the Nautilus P
 
 ---
 
-## 5. Late-Stage Strategies
-
-### Q: What are the optimal strategies for later stages (Stage 3+)?
+## 6. Late-Stage Strategies
 
 | Strategy | Market Condition | Execution |
 |---|---|---|
 | **Vol-Mining** | High "Washy" Volume | Hold through the noise to capture the 0.5% spread "tax" on every trade. |
 | **Stage-Exit Snipe** | Stage is >90% full | Enter at the end of a stage to benefit from a higher `sell_price` while paying the same `buy_price`. |
 | **Max-Pain Entry** | `sell / buy` ratio ≈ 0.62 | Accumulate at the mathematical floor where downside risk is minimized. |
-| **Inverse Panic** | Mass sell-off | Hold through panics; as supply shrinks, the spread concentration pushes the `sell_price` up for remaining holders. |
+| **Inverse Panic** | Mass sell-off | Hold through panics; as supply shrinks, the spread concentration pushes the `sell_price` up for survivors. |
 
 ---
 
-## 6. Identified System Constraints
+## 7. Identified System Constraints
 
 ### The Rent Lock-in (Absolute Insolvency)
 Simulation confirmed that the final ~1 token in any Nautilus instance is unredeemable. 
